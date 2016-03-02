@@ -53,7 +53,6 @@ public class MyAdapter extends RecyclerView.Adapter {
     public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
         //设置数据？
         ((MyViewHolder) holder).mTextView.setText(mList.get(position).getText());
-
         //ImageView生成随机高度
         ViewGroup.LayoutParams lp = ((MyViewHolder) holder).mImageView.getLayoutParams();
         lp.height = rand.nextInt(100) + 200;
@@ -84,6 +83,9 @@ public class MyAdapter extends RecyclerView.Adapter {
 
     }
 
+    /**
+     * 下载图片的异步任务类
+     */
     class LoadImage extends AsyncTask<String, Integer, Bitmap> {
         Bitmap bitmap = null;
         InputStream is = null;
@@ -120,12 +122,9 @@ public class MyAdapter extends RecyclerView.Adapter {
         @Override
         protected void onPostExecute(Bitmap bitmap) {
 
-
             ImageView image = myViewHolder.mImageView;
             Drawable drawable = new BitmapDrawable(bitmap);
             image.setBackground(drawable);
-
-
             super.onPostExecute(bitmap);
 
         }
