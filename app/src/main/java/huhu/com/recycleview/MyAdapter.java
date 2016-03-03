@@ -6,7 +6,9 @@ import android.graphics.BitmapFactory;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.AsyncTask;
+import android.support.v4.util.LruCache;
 import android.support.v7.widget.RecyclerView;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -32,19 +34,30 @@ public class MyAdapter extends RecyclerView.Adapter {
     private ArrayList<Bean> mList;
     //生成随机高度的Random
     private Random rand;
-    //item布局文件
-    public View itemview;
-
+    //图片缓存容量的上限
+    private int SizeofCache = 0;
+    //LruCache实例
+    private LruCache lruCache;
 
     public MyAdapter(Context mContext, ArrayList mList) {
         this.mContext = mContext;
         this.mList = mList;
         rand = new Random();
+        SizeofCache = (int) (Runtime.getRuntime().maxMemory() / 1024) / 8;
+        //实例化LruCache
+        lruCache = new LruCache<String, Bitmap>(SizeofCache) /*{
+            @Override
+            protected int sizeOf(String key, Bitmap bitmap) {
+                // 返回用户定义的item的大小，默认返回1代表item的数量.重写此方法来衡量每张图片的大小。
+                return bitmap.getByteCount() / 1024;
+            }
+        }*/;
+
     }
 
     @Override
     public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-        itemview = LayoutInflater.from(mContext).inflate(R.layout.item_layout, parent, false);
+        View itemview = LayoutInflater.from(mContext).inflate(R.layout.item_layout, parent, false);
         return new MyViewHolder(itemview);
 
     }
@@ -70,7 +83,28 @@ public class MyAdapter extends RecyclerView.Adapter {
         return mList.size();
     }
 
+    /**
+     * @param key    传入图片的key值，一般用图片url代替
+     * @param bitmap 要缓存的图片对象
+     */
+    public void addBitmapToCache(String key, Bitmap bitmap) {
+        if (getBitmapFromCache(key) == null) {
+            lruCache.put(key, bitmap);
+        }
 
+    }
+
+    /**
+     * @param key 要取出的bitmap的key值
+     * @return 返回取出的bitmap
+     */
+    public Bitmap getBitmapFromCache(String key) {
+        return (Bitmap) lruCache.get(key);
+    }
+
+    /**
+     * 定制ViewHolder
+     */
     class MyViewHolder extends RecyclerView.ViewHolder {
         public TextView mTextView;
         public ImageView mImageView;
@@ -99,24 +133,32 @@ public class MyAdapter extends RecyclerView.Adapter {
         @Override
         protected Bitmap doInBackground(String... strings) {
             String url = strings[0];
+            final Bitmap cachebitmap = getBitmapFromCache(url);
+            if (cachebitmap != null) {
+                Log.e("从缓存中取出", "" + cachebitmap.getByteCount());
+                return cachebitmap;
 
-            try {
+            } else {
+                try {
 
-                URL url_image = new URL(url);
-                URLConnection conn = url_image.openConnection();
-                conn.setDoInput(true);
-                conn.connect();
-                is = conn.getInputStream();
-                bitmap = BitmapFactory.decodeStream(is);
+                    URL url_image = new URL(url);
+                    URLConnection conn = url_image.openConnection();
+                    conn.setDoInput(true);
+                    conn.connect();
+                    is = conn.getInputStream();
+                    bitmap = BitmapFactory.decodeStream(is);
+                    //将下载好的bitmap放入缓存中
+                    addBitmapToCache(url, bitmap);
+                    Log.e("放进缓存", "" + bitmap.getRowBytes());
 
+                } catch (MalformedURLException e) {
+                    e.printStackTrace();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
 
-            } catch (MalformedURLException e) {
-                e.printStackTrace();
-            } catch (IOException e) {
-                e.printStackTrace();
+                return bitmap;
             }
-
-            return bitmap;
         }
 
         @Override
@@ -129,4 +171,5 @@ public class MyAdapter extends RecyclerView.Adapter {
 
         }
     }
+
 }
