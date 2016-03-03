@@ -8,7 +8,6 @@ import android.graphics.drawable.Drawable;
 import android.os.AsyncTask;
 import android.support.v4.util.LruCache;
 import android.support.v7.widget.RecyclerView;
-import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -45,13 +44,13 @@ public class MyAdapter extends RecyclerView.Adapter {
         rand = new Random();
         SizeofCache = (int) (Runtime.getRuntime().maxMemory() / 1024) / 8;
         //实例化LruCache
-        lruCache = new LruCache<String, Bitmap>(SizeofCache) /*{
+        lruCache = new LruCache<String, Bitmap>(SizeofCache) {
             @Override
             protected int sizeOf(String key, Bitmap bitmap) {
                 // 返回用户定义的item的大小，默认返回1代表item的数量.重写此方法来衡量每张图片的大小。
                 return bitmap.getByteCount() / 1024;
             }
-        }*/;
+        };
 
     }
 
@@ -64,17 +63,23 @@ public class MyAdapter extends RecyclerView.Adapter {
 
     @Override
     public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
-        //设置数据？
+        /*1.先用本地图片占位
+        * 2.现将imageView设置为不可见状态*/
+        //((MyViewHolder) holder).mImageView.setBackgroundResource(R.mipmap.ic_launcher);
+        ((MyViewHolder) holder).mImageView.setVisibility(View.INVISIBLE);
+        //设置数据
         ((MyViewHolder) holder).mTextView.setText(mList.get(position).getText());
+        ((MyViewHolder) holder).mImageView.setTag(mList.get(position).getUrl());
         //ImageView生成随机高度
         ViewGroup.LayoutParams lp = ((MyViewHolder) holder).mImageView.getLayoutParams();
         lp.height = rand.nextInt(100) + 200;
         ((MyViewHolder) holder).mImageView.setLayoutParams(lp);
         //新建异步任务
         LoadImage imageLoad = new LoadImage((MyViewHolder) holder);
-
         //执行下载任务
         imageLoad.execute(mList.get(position).getUrl());
+        ((MyViewHolder) holder).mImageView.setTag(mList.get(position).getUrl());
+
 
     }
 
@@ -99,6 +104,7 @@ public class MyAdapter extends RecyclerView.Adapter {
      * @return 返回取出的bitmap
      */
     public Bitmap getBitmapFromCache(String key) {
+
         return (Bitmap) lruCache.get(key);
     }
 
@@ -123,7 +129,7 @@ public class MyAdapter extends RecyclerView.Adapter {
     class LoadImage extends AsyncTask<String, Integer, Bitmap> {
         Bitmap bitmap = null;
         InputStream is = null;
-
+        String url;
         MyViewHolder myViewHolder = null;
 
         public LoadImage(MyViewHolder myViewHolder) {
@@ -132,10 +138,9 @@ public class MyAdapter extends RecyclerView.Adapter {
 
         @Override
         protected Bitmap doInBackground(String... strings) {
-            String url = strings[0];
+            url = strings[0];
             final Bitmap cachebitmap = getBitmapFromCache(url);
             if (cachebitmap != null) {
-                Log.e("从缓存中取出", "" + cachebitmap.getByteCount());
                 return cachebitmap;
 
             } else {
@@ -149,8 +154,6 @@ public class MyAdapter extends RecyclerView.Adapter {
                     bitmap = BitmapFactory.decodeStream(is);
                     //将下载好的bitmap放入缓存中
                     addBitmapToCache(url, bitmap);
-                    Log.e("放进缓存", "" + bitmap.getRowBytes());
-
                 } catch (MalformedURLException e) {
                     e.printStackTrace();
                 } catch (IOException e) {
@@ -165,8 +168,12 @@ public class MyAdapter extends RecyclerView.Adapter {
         protected void onPostExecute(Bitmap bitmap) {
 
             ImageView image = myViewHolder.mImageView;
-            Drawable drawable = new BitmapDrawable(bitmap);
-            image.setBackground(drawable);
+            if (image.getTag().equals(url)) {
+                image.setVisibility(View.VISIBLE);
+                Drawable drawable = new BitmapDrawable(bitmap);
+                image.setBackground(drawable);
+            }
+
             super.onPostExecute(bitmap);
 
         }
