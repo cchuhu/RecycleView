@@ -11,6 +11,7 @@ import android.os.AsyncTask;
 import android.os.Environment;
 import android.support.v4.util.LruCache;
 import android.support.v7.widget.RecyclerView;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -225,8 +226,12 @@ public class MyAdapter extends RecyclerView.Adapter {
                         fileDescriptor = fileInputStream.getFD();
                         //如果fileDescriptor不为空，开始解析bitmap,加入到内存缓存中,并返回图片
                         if (fileDescriptor != null) {
+//为什么返回是null?
                             Bitmap diskcachebitmap = BitmapFactory.decodeFileDescriptor(fileDescriptor);
-                            addBitmapToCache(url, diskcachebitmap);
+                            if(diskcachebitmap==null){
+                                Log.e("bitmap","null");
+                            }
+                           // addBitmapToCache(url, diskcachebitmap);
                             return diskcachebitmap;
                         }
                         return null;
