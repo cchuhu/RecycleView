@@ -1,11 +1,14 @@
 package huhu.com.recycleview;
 
 import android.content.Context;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.AsyncTask;
+import android.os.Environment;
 import android.support.v4.util.LruCache;
 import android.support.v7.widget.RecyclerView;
 import android.view.LayoutInflater;
@@ -14,13 +17,20 @@ import android.view.ViewGroup;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import java.io.File;
+import java.io.FileDescriptor;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.MalformedURLException;
+import java.io.OutputStream;
 import java.net.URL;
 import java.net.URLConnection;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Random;
+
+import libcore.io.DiskLruCache;
 
 /**
  * Created by Huhu on 3/1/16.
@@ -37,11 +47,14 @@ public class MyAdapter extends RecyclerView.Adapter {
     private int SizeofCache = 0;
     //LruCache实例
     private LruCache lruCache;
+    //DiskLruCache的实例
+    private DiskLruCache diskLruCache;
 
     public MyAdapter(Context mContext, ArrayList mList) {
         this.mContext = mContext;
         this.mList = mList;
         rand = new Random();
+        //获取缓存上限
         SizeofCache = (int) (Runtime.getRuntime().maxMemory() / 1024) / 8;
         //实例化LruCache
         lruCache = new LruCache<String, Bitmap>(SizeofCache) {
@@ -51,6 +64,17 @@ public class MyAdapter extends RecyclerView.Adapter {
                 return bitmap.getByteCount() / 1024;
             }
         };
+        // 获取图片缓存路径
+        File diskcacheDir = getDiskCacheDir(mContext, "photos");
+        if (!diskcacheDir.exists()) {
+            diskcacheDir.mkdirs();
+        }
+        // 实例化DiskLruCache
+        try {
+            diskLruCache = DiskLruCache.open(diskcacheDir, getAppVersion(mContext), 1, 10 * 1024 * 1024);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
 
     }
 
@@ -65,10 +89,11 @@ public class MyAdapter extends RecyclerView.Adapter {
     public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
         /*1.先用本地图片占位
         * 2.现将imageView设置为不可见状态*/
-        //((MyViewHolder) holder).mImageView.setBackgroundResource(R.mipmap.ic_launcher);
+        ((MyViewHolder) holder).mImageView.setBackgroundResource(R.mipmap.ic_launcher);
         ((MyViewHolder) holder).mImageView.setVisibility(View.INVISIBLE);
         //设置数据
         ((MyViewHolder) holder).mTextView.setText(mList.get(position).getText());
+        //设置tag，防止错位
         ((MyViewHolder) holder).mImageView.setTag(mList.get(position).getUrl());
         //ImageView生成随机高度
         ViewGroup.LayoutParams lp = ((MyViewHolder) holder).mImageView.getLayoutParams();
@@ -109,18 +134,62 @@ public class MyAdapter extends RecyclerView.Adapter {
     }
 
     /**
-     * 定制ViewHolder
+     * 将URL进行MD5编码，防止特殊字符出现
+     *
+     * @param key
+     * @return
      */
-    class MyViewHolder extends RecyclerView.ViewHolder {
-        public TextView mTextView;
-        public ImageView mImageView;
 
-        public MyViewHolder(View itemView) {
-            super(itemView);
-            mTextView = (TextView) itemView.findViewById(R.id.textview);
-            mImageView = (ImageView) itemView.findViewById(R.id.imageview);
+    public String hashKeyForDisk(String key) {
+        String cacheKey;
+        try {
+            //信息摘要算法提供类
+            final MessageDigest mDigest = MessageDigest.getInstance("MD5");
+            mDigest.update(key.getBytes());
+            cacheKey = bytesToHexString(mDigest.digest());
+        } catch (NoSuchAlgorithmException e) {
+            cacheKey = String.valueOf(key.hashCode());
         }
+        return cacheKey;
+    }
 
+    private String bytesToHexString(byte[] bytes) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < bytes.length; i++) {
+            //十六进制转换
+            String hex = Integer.toHexString(0xFF & bytes[i]);
+            if (hex.length() == 1) {
+                sb.append('0');
+            }
+            sb.append(hex);
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 根据传入的uniqueName获取硬盘缓存的路径地址。
+     */
+    public File getDiskCacheDir(Context context, String uniqueName) {
+        String cachePath;
+        if (Environment.MEDIA_MOUNTED.equals(Environment.getExternalStorageState()) || !Environment.isExternalStorageRemovable()) {
+            cachePath = context.getExternalCacheDir().getPath();
+        } else {
+            cachePath = context.getCacheDir().getPath();
+        }
+        return new File(cachePath + File.separator + uniqueName);
+    }
+
+    /**
+     * 获取当前应用程序的版本号。
+     */
+    public int getAppVersion(Context context) {
+        try {
+            PackageInfo info = context.getPackageManager().getPackageInfo(context.getPackageName(), 0);
+            return info.versionCode;
+        } catch (PackageManager.NameNotFoundException e) {
+            e.printStackTrace();
+        }
+        return 1;
     }
 
     /**
@@ -129,8 +198,11 @@ public class MyAdapter extends RecyclerView.Adapter {
     class LoadImage extends AsyncTask<String, Integer, Bitmap> {
         Bitmap bitmap = null;
         InputStream is = null;
-        String url;
+        String url = null;
         MyViewHolder myViewHolder = null;
+        DiskLruCache.Snapshot snapshot = null;
+        FileInputStream fileInputStream = null;
+        FileDescriptor fileDescriptor = null;
 
         public LoadImage(MyViewHolder myViewHolder) {
             this.myViewHolder = myViewHolder;
@@ -138,30 +210,53 @@ public class MyAdapter extends RecyclerView.Adapter {
 
         @Override
         protected Bitmap doInBackground(String... strings) {
-            url = strings[0];
-            final Bitmap cachebitmap = getBitmapFromCache(url);
-            if (cachebitmap != null) {
-                return cachebitmap;
-
-            } else {
-                try {
-
-                    URL url_image = new URL(url);
-                    URLConnection conn = url_image.openConnection();
-                    conn.setDoInput(true);
-                    conn.connect();
-                    is = conn.getInputStream();
-                    bitmap = BitmapFactory.decodeStream(is);
-                    //将下载好的bitmap放入缓存中
-                    addBitmapToCache(url, bitmap);
-                } catch (MalformedURLException e) {
-                    e.printStackTrace();
-                } catch (IOException e) {
-                    e.printStackTrace();
+            try {
+                url = strings[0];
+                Bitmap cachebitmap = getBitmapFromCache(url);
+                //先从缓存中取，如果缓存不为空，则返回图片
+                if (cachebitmap != null) {
+                    return cachebitmap;
+                } else {
+                    //如果内存缓存中取不到，再尝试从硬盘中取
+                    snapshot = diskLruCache.get(hashKeyForDisk(url));
+                    //如果snapshot不为空，证明硬盘中存在缓存，则将其加入内存缓存
+                    if (snapshot != null) {
+                        fileInputStream = (FileInputStream) snapshot.getInputStream(0);
+                        fileDescriptor = fileInputStream.getFD();
+                        //如果fileDescriptor不为空，开始解析bitmap,加入到内存缓存中,并返回图片
+                        if (fileDescriptor != null) {
+                            Bitmap diskcachebitmap = BitmapFactory.decodeFileDescriptor(fileDescriptor);
+                            addBitmapToCache(url, diskcachebitmap);
+                            return diskcachebitmap;
+                        }
+                        return null;
+                    }
+                    //如果snapshot为空，则开启线程从网络获取资源
+                    else {
+                        URL url_image = new URL(url);
+                        URLConnection conn = url_image.openConnection();
+                        conn.setDoInput(true);
+                        conn.connect();
+                        is = conn.getInputStream();
+                        bitmap = BitmapFactory.decodeStream(is);
+                        //下载完之后，利用editor将图片写入硬盘缓存
+                        DiskLruCache.Editor editor = diskLruCache.edit(hashKeyForDisk(url));
+                        OutputStream out = editor.newOutputStream(0);
+                        int b;
+                        while ((b = is.read()) != -1) {
+                            out.write(b);
+                        }
+                        editor.commit();
+                        //并将下载好的bitmap放入缓存中
+                        addBitmapToCache(url, bitmap);
+                    }
                 }
-
                 return bitmap;
+
+            } catch (IOException e) {
+                e.printStackTrace();
             }
+            return null;
         }
 
         @Override
@@ -179,4 +274,18 @@ public class MyAdapter extends RecyclerView.Adapter {
         }
     }
 
+    /**
+     * 定制ViewHolder
+     */
+    class MyViewHolder extends RecyclerView.ViewHolder {
+        public TextView mTextView;
+        public ImageView mImageView;
+
+        public MyViewHolder(View itemView) {
+            super(itemView);
+            mTextView = (TextView) itemView.findViewById(R.id.textview);
+            mImageView = (ImageView) itemView.findViewById(R.id.imageview);
+        }
+
+    }
 }
