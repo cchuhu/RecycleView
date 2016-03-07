@@ -18,14 +18,16 @@ import android.view.ViewGroup;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
 import java.net.URL;
-import java.net.URLConnection;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -120,7 +122,11 @@ public class MyAdapter extends RecyclerView.Adapter {
      */
     public void addBitmapToCache(String key, Bitmap bitmap) {
         if (getBitmapFromCache(key) == null) {
-            lruCache.put(key, bitmap);
+            if (bitmap == null) {
+                return;
+            } else {
+                lruCache.put(key, bitmap);
+            }
         }
 
     }
@@ -204,6 +210,8 @@ public class MyAdapter extends RecyclerView.Adapter {
         DiskLruCache.Snapshot snapshot = null;
         FileInputStream fileInputStream = null;
         FileDescriptor fileDescriptor = null;
+        BufferedInputStream in = null;
+        BufferedOutputStream out = null;
 
         public LoadImage(MyViewHolder myViewHolder) {
             this.myViewHolder = myViewHolder;
@@ -216,47 +224,57 @@ public class MyAdapter extends RecyclerView.Adapter {
                 Bitmap cachebitmap = getBitmapFromCache(url);
                 //先从缓存中取，如果缓存不为空，则返回图片
                 if (cachebitmap != null) {
+                    Log.e(url,"存在于内存中,直接返回");
                     return cachebitmap;
                 } else {
+
                     //如果内存缓存中取不到，再尝试从硬盘中取
+                    Log.e(url,"内存中不存在，从硬盘缓存中找");
                     snapshot = diskLruCache.get(hashKeyForDisk(url));
-                    //如果snapshot不为空，证明硬盘中存在缓存，则将其加入内存缓存
-                    if (snapshot != null) {
-                        fileInputStream = (FileInputStream) snapshot.getInputStream(0);
-                        fileDescriptor = fileInputStream.getFD();
-                        //如果fileDescriptor不为空，开始解析bitmap,加入到内存缓存中,并返回图片
-                        if (fileDescriptor != null) {
-//为什么返回是null?
-                            Bitmap diskcachebitmap = BitmapFactory.decodeFileDescriptor(fileDescriptor);
-                            if(diskcachebitmap==null){
-                                Log.e("bitmap","null");
-                            }
-                           // addBitmapToCache(url, diskcachebitmap);
-                            return diskcachebitmap;
-                        }
-                        return null;
-                    }
-                    //如果snapshot为空，则开启线程从网络获取资源
-                    else {
+                    //如果snapshot为空，则从网络下载图片
+                    if (snapshot == null) {
+                        Log.e(url,"硬盘中没有，从网络下载");
                         URL url_image = new URL(url);
-                        URLConnection conn = url_image.openConnection();
+                        HttpURLConnection conn = (HttpURLConnection) url_image.openConnection();
                         conn.setDoInput(true);
                         conn.connect();
+                        //利用editor将图片写入硬盘缓存
                         is = conn.getInputStream();
-                        bitmap = BitmapFactory.decodeStream(is);
-                        //下载完之后，利用editor将图片写入硬盘缓存
+                        in = new BufferedInputStream(is, 8 * 1024);
                         DiskLruCache.Editor editor = diskLruCache.edit(hashKeyForDisk(url));
-                        OutputStream out = editor.newOutputStream(0);
+                        OutputStream outputStream = editor.newOutputStream(0);
+                        out = new BufferedOutputStream(outputStream, 8 * 1024);
                         int b;
-                        while ((b = is.read()) != -1) {
+                        while ((b = in.read()) != -1) {
                             out.write(b);
                         }
                         editor.commit();
-                        //并将下载好的bitmap放入缓存中
-                        addBitmapToCache(url, bitmap);
+                        diskLruCache.flush();
+                        conn.disconnect();
+                        out.close();
+                        in.close();
                     }
+                    //再次查找对应缓存
+                    snapshot = diskLruCache.get(hashKeyForDisk(url));
+                    //将bitmap写入内存缓存
+                    fileInputStream = (FileInputStream) snapshot.getInputStream(0);
+                    fileDescriptor = fileInputStream.getFD();
+                    //如果fileDescriptor不为空，开始解析bitmap,加入到内存缓存中,并返回图片
+                    if (fileDescriptor != null) {
+                        Bitmap diskcachebitmap = BitmapFactory.decodeFileDescriptor(fileDescriptor);
+                        if (diskcachebitmap == null) {
+                            return null;
+                        } else {
+                            Log.e(url,"重新加入到内存缓存中");
+                            addBitmapToCache(url, diskcachebitmap);
+                            return diskcachebitmap;
+                        }
+
+                    }
+                    return bitmap;
+
                 }
-                return bitmap;
+
 
             } catch (IOException e) {
                 e.printStackTrace();
